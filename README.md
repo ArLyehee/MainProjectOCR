@@ -4,10 +4,9 @@
 데이터를 정제하여 ERP DB에 자동 입력하는 파이프라인 구성예정
 
 ## 프로젝트 개요
-
-개발 기간 : 2026.03.16 ~ 진행중
-사용 기술 : Python, TesseractOCR, OpenCV, pdf2image
-목적 : 거래명세서 PDF -> OCR -> 데이터 정제 -> ERP DB에 자동 입력
+- 개발 기간 : 2026.03.16 ~ 진행중
+- 사용 기술 : Python, TesseractOCR, OpenCV, pdf2image
+- 목적 : 거래명세서 PDF -> OCR -> 데이터 정제 -> ERP DB에 자동 입력
 
 ## 라이브러리
 - pytesseract==0.3.13
