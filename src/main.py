@@ -9,6 +9,7 @@ from cer_eval import evaluate, normalize
 import pandas as pd
 from datetime import datetime
 from postprocess import postprocess_text
+from visualize_ocr import visualize_pipeline
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +61,10 @@ def process_receipt(pdf_path: str,
         result = evaluate(ocr_text, gt_path)
     else:
         print("ground_truth.txt 없음 → CER 건너뜀")
+
+    vis_dir = os.path.join(ROOT_DIR, "output", folder_name, "visualization")
+    visualize_pipeline(pdf_path, prep=prep, save_dir=vis_dir)
+    print(f"  → 시각화 저장: output/{folder_name}/visualization/\n")
 
     txt_path = os.path.join(exp_dir, f"{exp_name}_ocr.txt")
     with open(txt_path, "w", encoding="utf-8") as f:
