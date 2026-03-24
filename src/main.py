@@ -1,10 +1,11 @@
 import sys
 import os
+import json
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from pdf_to_image import pdf_to_images
 from ocr_extractor import extract_text
-from parser import parse_receipt
+from parser import parse_receipt, parse_transaction_statement
 from cer_eval import evaluate, normalize
 import pandas as pd
 from datetime import datetime
@@ -88,7 +89,51 @@ def process_receipt(pdf_path: str,
     }
 
 
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """pdfplumber로 PDF 텍스트 직접 추출 (이미지 변환 없이)"""
+    import pdfplumber
+    text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+    return text.strip()
+
+
+def run_erp_mode(pdf_path: str):
+    """ERP 자동등록 모드 - JSON을 stdout으로 출력"""
+    try:
+        # 1차: pdfplumber로 텍스트 직접 추출 (컴퓨터 생성 PDF에 최적)
+        raw_text = extract_text_from_pdf(pdf_path)
+        method = "pdfplumber"
+
+        # 텍스트가 너무 짧으면 스캔 PDF로 판단 → OCR로 폴백
+        if len(raw_text.strip()) < 20:
+            image_paths = pdf_to_images(pdf_path, dpi=300)
+            raw_text = ""
+            for image_path in image_paths:
+                t = extract_text(image_path, prep="otsu", langs="kor+eng", psm=4)
+                raw_text += postprocess_text(t) + "\n"
+            method = "ocr"
+
+        sys.stderr.buffer.write((f"[{method.upper()} TEXT]\n" + raw_text).encode("utf-8", errors="replace"))
+        parsed = parse_transaction_statement(raw_text)
+        sys.stdout.buffer.write(json.dumps({"success": True, "data": parsed}, ensure_ascii=False).encode("utf-8") + b"\n")
+    except Exception as e:
+        sys.stdout.buffer.write(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False).encode("utf-8") + b"\n")
+
+
 if __name__ == "__main__":
+    # ERP 모드: python src/main.py --erp-mode <pdf_path>
+    if "--erp-mode" in sys.argv:
+        idx = sys.argv.index("--erp-mode")
+        if idx + 1 >= len(sys.argv):
+            print(json.dumps({"success": False, "error": "파일 경로 인자 없음"}, ensure_ascii=False))
+            sys.exit(1)
+        run_erp_mode(sys.argv[idx + 1])
+        sys.exit(0)
+
     input_dir = os.path.join(ROOT_DIR, "input")
     pdf_files = [f for f in os.listdir(input_dir) if f.endswith(".pdf")]
     if not pdf_files:

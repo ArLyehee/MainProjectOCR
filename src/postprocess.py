@@ -35,6 +35,17 @@ def postprocess_text(text: str) -> str:
         cleaned = re.sub(r'["\']', '', cleaned)
         cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
 
+        # 한글 글자 사이 공백 제거 (Tesseract OCR 특성: 각 글자를 분리 인식)
+        # "상 호 ( 법 인 명 )" → "상호(법인명)"
+        for _ in range(10):
+            prev = cleaned
+            cleaned = re.sub(r'([가-힣])\s+([가-힣])', r'\1\2', cleaned)
+            cleaned = re.sub(r'([가-힣])\s+\(', r'\1(', cleaned)
+            cleaned = re.sub(r'\(\s*([가-힣])', r'(\1', cleaned)
+            cleaned = re.sub(r'([가-힣])\s*\)', r'\1)', cleaned)
+            if cleaned == prev:
+                break
+
         if len(cleaned) <= 1 and not cleaned.isdigit():
             continue
 
