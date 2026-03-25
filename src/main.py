@@ -89,36 +89,83 @@ def process_receipt(pdf_path: str,
     }
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
-    """pdfplumber로 PDF 텍스트 직접 추출 (이미지 변환 없이)"""
+def extract_text_from_pdf(pdf_path: str):
+    """pdfplumber로 PDF 텍스트와 테이블 직접 추출 (이미지 변환 없이)"""
     import pdfplumber
     text = ""
+    all_tables = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
-    return text.strip()
+            tables = page.extract_tables()
+            if tables:
+                all_tables.extend(tables)
+    return text.strip(), all_tables
 
 
 def run_erp_mode(pdf_path: str):
     """ERP 자동등록 모드 - JSON을 stdout으로 출력"""
     try:
         # 1차: pdfplumber로 텍스트 직접 추출 (컴퓨터 생성 PDF에 최적)
-        raw_text = extract_text_from_pdf(pdf_path)
+        raw_text, tables = extract_text_from_pdf(pdf_path)
         method = "pdfplumber"
 
         # 텍스트가 너무 짧으면 스캔 PDF로 판단 → OCR로 폴백
+        image_paths = []
         if len(raw_text.strip()) < 20:
             image_paths = pdf_to_images(pdf_path, dpi=300)
             raw_text = ""
+            tables = []
             for image_path in image_paths:
                 t = extract_text(image_path, prep="otsu", langs="kor+eng", psm=4)
                 raw_text += postprocess_text(t) + "\n"
             method = "ocr"
 
         sys.stderr.buffer.write((f"[{method.upper()} TEXT]\n" + raw_text).encode("utf-8", errors="replace"))
-        parsed = parse_transaction_statement(raw_text)
+        debug_tables = f"\n[TABLES FOUND: {len(tables)}]\n"
+        for ti, t in enumerate(tables):
+            debug_tables += f"  table[{ti}]: {len(t)} rows\n"
+            for ri, row in enumerate(t[:5]):
+                debug_tables += f"    row[{ri}]: {row}\n"
+        sys.stderr.buffer.write(debug_tables.encode("utf-8", errors="replace"))
+
+        # Groq → Gemini → 정규식 순서로 시도
+        parsed = None
+        if os.environ.get("GROQ_API_KEY"):
+            try:
+                from parser import parse_with_groq
+                parsed = parse_with_groq(raw_text)
+                sys.stderr.buffer.write(b"[PARSER: Groq]\n")
+            except Exception as e:
+                sys.stderr.buffer.write(f"[GROQ FAILED: {e}]\n".encode("utf-8", errors="replace"))
+        if parsed is None and os.environ.get("GEMINI_API_KEY"):
+            try:
+                from parser import parse_with_gemini
+                parsed = parse_with_gemini(raw_text)
+                sys.stderr.buffer.write(b"[PARSER: Gemini]\n")
+            except Exception as e:
+                sys.stderr.buffer.write(f"[GEMINI FAILED: {e}]\n".encode("utf-8", errors="replace"))
+        if parsed is None:
+            parsed = parse_transaction_statement(raw_text, tables)
+            sys.stderr.buffer.write(b"[PARSER: regex fallback]\n")
+
+        # 결과가 부실하고 이미지가 있으면 Vision으로 재시도
+        def _is_poor(p):
+            return p.get("customer_name") is None and p.get("total_amount") is None and not p.get("items")
+        if _is_poor(parsed) and image_paths and os.environ.get("GROQ_API_KEY"):
+            try:
+                from parser import parse_with_groq_vision
+                parsed = parse_with_groq_vision(image_paths)
+                sys.stderr.buffer.write(b"[PARSER: Groq Vision fallback]\n")
+            except Exception as e:
+                sys.stderr.buffer.write(f"[GROQ VISION FAILED: {e}]\n".encode("utf-8", errors="replace"))
+
+        # manager_name은 Java 폼에서 입력받음 — OCR 추출값 사용 안 함
+        parsed["manager_name"] = None
+
+        sys.stderr.buffer.write(f"\n[PARSED ITEMS: {len(parsed.get('items', []))}]\n{parsed.get('items')}\n".encode("utf-8", errors="replace"))
         sys.stdout.buffer.write(json.dumps({"success": True, "data": parsed}, ensure_ascii=False).encode("utf-8") + b"\n")
     except Exception as e:
         sys.stdout.buffer.write(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False).encode("utf-8") + b"\n")

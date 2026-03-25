@@ -1,8 +1,275 @@
 import re
+import json
+import os
 from datetime import datetime
 
+
+def parse_with_groq_vision(image_paths: list) -> dict:
+    """Groq Vision API로 이미지에서 직접 거래명세서 파싱 — 저화질 스캔 대응"""
+    from groq import Groq
+    import base64
+
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY 없음")
+
+    client = Groq(api_key=api_key)
+
+    image_path = image_paths[0]
+    with open(image_path, "rb") as f:
+        image_data = base64.b64encode(f.read()).decode("utf-8")
+    ext = os.path.splitext(image_path)[1].lower()
+    media_type = "image/png" if ext == ".png" else "image/jpeg"
+
+    prompt = """이 거래명세서 이미지에서 정보를 추출해서 JSON으로만 응답하세요.
+공급자(판매자)와 공급받는자(구매자) 중 "개발환기좀해 ERP"가 아닌 쪽이 customer_name입니다.
+숫자 필드는 쉼표/원 제거한 정수로, 없으면 null로 설정하세요.
+customer_addr는 도로명/지번 주소만 입력하고, 사람 이름은 절대 포함하지 마세요.
+manager_name은 항상 null로 설정하세요.
+JSON만 응답하고 다른 텍스트는 쓰지 마세요.
+
+{
+  "issue_date": "YYYY-MM-DD",
+  "customer_name": "공급자 회사명",
+  "customer_biz_no": "사업자번호",
+  "customer_tel": "연락처",
+  "customer_addr": "도로명 또는 지번 주소만",
+  "manager_name": null,
+  "notes": "비고",
+  "total_amount": 공급가액,
+  "tax_amount": 세액,
+  "grand_total": 합계금액,
+  "items": [{"item_name": "품목명", "quantity": 수량, "unit_price": 단가, "amount": 금액}]
+}"""
+
+    response = client.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_data}"}},
+            {"type": "text", "text": prompt}
+        ]}],
+        temperature=0
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return json.loads(raw.strip())
+
+
+def parse_with_groq(text: str) -> dict:
+    """Groq API로 거래명세서 파싱"""
+    from groq import Groq
+
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY 환경변수 없음")
+
+    client = Groq(api_key=api_key)
+    prompt = f"""다음은 거래명세서 텍스트입니다. 아래 JSON 형식으로 정보를 추출하세요.
+공급자(판매자)와 공급받는자(구매자) 중 "개발환기좀해 ERP"가 아닌 쪽이 customer_name입니다.
+숫자 필드는 쉼표/원 제거한 정수로, 없으면 null로 설정하세요.
+customer_addr는 도로명/지번 주소만 입력하고, 사람 이름은 절대 포함하지 마세요.
+manager_name은 항상 null로 설정하세요.
+JSON만 응답하고 다른 텍스트는 쓰지 마세요.
+
+{{
+  "issue_date": "YYYY-MM-DD",
+  "customer_name": "공급자 회사명",
+  "customer_biz_no": "사업자번호",
+  "customer_tel": "연락처",
+  "customer_addr": "도로명 또는 지번 주소만",
+  "manager_name": null,
+  "notes": "비고",
+  "total_amount": 공급가액,
+  "tax_amount": 세액,
+  "grand_total": 합계금액,
+  "items": [
+    {{"item_name": "품목명", "quantity": 수량, "unit_price": 단가, "amount": 금액}}
+  ]
+}}
+
+거래명세서:
+{text}"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return json.loads(raw.strip())
+
+
+def parse_with_gemini(text: str) -> dict:
+    """Gemini API로 거래명세서 파싱 — 어떤 양식이든 호환"""
+    from google import genai
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY 환경변수 없음")
+
+    client = genai.Client(api_key=api_key)
+
+    prompt = f"""다음은 거래명세서 텍스트입니다. 아래 JSON 형식으로 정보를 추출하세요.
+공급자(판매자)와 공급받는자(구매자) 중 "개발환기좀해 ERP"가 아닌 쪽이 customer_name입니다.
+숫자 필드는 쉼표/원 제거한 정수로, 없으면 null로 설정하세요.
+customer_addr는 도로명/지번 주소만 입력하고, 사람 이름은 절대 포함하지 마세요.
+manager_name은 항상 null로 설정하세요.
+JSON만 응답하고 다른 텍스트는 쓰지 마세요.
+
+{{
+  "issue_date": "YYYY-MM-DD",
+  "customer_name": "공급자 회사명",
+  "customer_biz_no": "사업자번호",
+  "customer_tel": "연락처",
+  "customer_addr": "도로명 또는 지번 주소만",
+  "manager_name": null,
+  "notes": "비고",
+  "total_amount": 공급가액,
+  "tax_amount": 세액,
+  "grand_total": 합계금액,
+  "items": [
+    {{"item_name": "품목명", "quantity": 수량, "unit_price": 단가, "amount": 금액}}
+  ]
+}}
+
+거래명세서:
+{text}"""
+
+    response = client.models.generate_content(model="gemini-2.0-flash-lite", contents=prompt)
+    raw = response.text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return json.loads(raw.strip())
+
+
+def _parse_items_from_tables(tables: list) -> list:
+    """pdfplumber extract_tables() 결과에서 품목 행 파싱"""
+    items = []
+    for table in tables:
+        if not table:
+            continue
+        # 헤더 행 찾기 (품목명 관련 키워드 포함)
+        header_idx = -1
+        for i, row in enumerate(table):
+            row_text = " ".join(str(c or "") for c in row)
+            if re.search(r"품목|품\s*명", row_text):
+                header_idx = i
+                break
+        if header_idx < 0:
+            continue
+
+        header = [str(c or "").strip() for c in table[header_idx]]
+
+        # 컬럼 인덱스 탐색
+        name_col = qty_col = price_col = amt_col = -1
+        for j, h in enumerate(header):
+            if re.search(r"품목|품명|품\s*목\s*명", h) and name_col < 0:
+                name_col = j
+            elif re.search(r"수\s*량", h) and qty_col < 0:
+                qty_col = j
+            elif re.search(r"단\s*가", h) and price_col < 0:
+                price_col = j
+            elif re.search(r"공급가|금\s*액", h) and amt_col < 0:
+                amt_col = j
+
+        if name_col < 0:
+            continue
+
+        for row in table[header_idx + 1:]:
+            if not row or len(row) <= name_col:
+                continue
+            item_name = str(row[name_col] or "").strip()
+            if not item_name:
+                continue
+            if re.match(r"^(합계|소계|계|No|번호|품목명|합\s*계)$", item_name, re.IGNORECASE):
+                continue
+            if not re.search(r"[가-힣A-Za-z0-9]", item_name):
+                continue
+
+            qty = 1
+            if qty_col >= 0 and qty_col < len(row) and row[qty_col]:
+                try:
+                    qty = int(str(row[qty_col]).replace(",", "").strip()) or 1
+                except Exception:
+                    pass
+
+            price = 0
+            if price_col >= 0 and price_col < len(row) and row[price_col]:
+                try:
+                    price = int(str(row[price_col]).replace(",", "").strip())
+                except Exception:
+                    pass
+
+            amount = 0
+            if amt_col >= 0 and amt_col < len(row) and row[amt_col]:
+                try:
+                    amount = int(str(row[amt_col]).replace(",", "").strip())
+                except Exception:
+                    pass
+
+            if amount == 0 and price > 0:
+                amount = qty * price
+
+            items.append({
+                "item_name": item_name,
+                "quantity": qty,
+                "unit_price": price,
+                "amount": amount
+            })
+    return items
+
+
+def _parse_items_ocr_fallback(lines: list, total: int) -> list:
+    """스캔 PDF OCR 폴백: 줄이 분리된 경우 품목명 + 수량/단가 느슨하게 추출"""
+    # 세액/합계/사업자 등 문맥 라인 제외하고 숫자 수집 (오염 방지)
+    ctx_pattern = re.compile(r"세액|공급가|합계|사업자|명세서|발행일|담당자|상호|연락처|주소|%")
+    all_nums = set()
+    for line in lines:
+        if ctx_pattern.search(line):
+            continue
+        for n in re.findall(r"\b\d[\d,]+\b", line):
+            v = int(n.replace(",", ""))
+            if 0 < v < 100000000:
+                all_nums.add(v)
+
+    items = []
+    for line in lines:
+        # "번호 [잡문자] 품목명" 패턴 (한글/영문/숫자 시작 모두 허용)
+        m = re.match(r"^\d{1,2}\s+[^\d가-힣A-Za-z\n]{0,6}\s*([가-힣A-Za-z0-9][가-힣A-Za-z0-9\-_\s\(\)]{0,30})", line)
+        if not m:
+            continue
+        item_name = re.sub(r"\s+", " ", m.group(1)).strip()
+        if len(item_name) < 2:
+            continue
+        if re.match(r"^(품목명|상호|주소|서명|확인|담당자|공급자|수령|공급받)$", item_name):
+            continue
+
+        qty, unit_price, amount = 1, total, total
+        if total > 0:
+            cands = sorted([v for v in all_nums if 0 < v < total])
+            for q in cands:
+                if total % q == 0:
+                    p = total // q
+                    if p in all_nums and p != q and p != total:
+                        qty, unit_price, amount = q, p, total
+                        break
+
+        items.append({"item_name": item_name, "quantity": qty, "unit_price": unit_price, "amount": amount})
+
+    # 중복 제거
+    seen, deduped = set(), []
+    for it in items:
+        if it["item_name"] not in seen:
+            seen.add(it["item_name"])
+            deduped.append(it)
+    return deduped
+
+
 # 거래명세서 ERP 자동등록 전용 파서
-def parse_transaction_statement(text: str) -> dict:
+def parse_transaction_statement(text: str, tables: list = None) -> dict:
     result = {
         "issue_date": None,
         "customer_name": None,
@@ -110,23 +377,38 @@ def parse_transaction_statement(text: str) -> dict:
         if totm:
             result["grand_total"] = int(totm.group(1).replace(",", ""))
 
-        # 품목 행: "번호 품목명 수량 단가 금액"
-        im = re.match(r"^(\d+)\s+(.+?)\s+(\d[\d,]*)\s+(\d[\d,]+)\s+(\d[\d,]+)\s*$", line)
+        # 품목 행: "[번호] 품목명 [규격] 수량 단가 공급가액 [세액] [비고]"
+        # 번호 선택적, 추가 컬럼(규격/세액/비고) 허용
+        im = re.match(r"^(?:\d+\s+)?(.+?)\s+(\d[\d,]*)\s+(\d[\d,]+)\s+(\d[\d,]+)(?:\s+[\d,]+)?(?:\s+.*)?$", line)
         if im:
-            item_name = im.group(2).strip()
-            # 유효 문자(한글/영문/숫자) 비율이 30% 미만이면 OCR 쓰레기 문자로 판단
-            valid_chars = len(re.findall(r"[가-힣A-Za-z0-9]", item_name))
-            total_chars = len(item_name.replace(" ", ""))
-            readable = total_chars == 0 or (valid_chars / total_chars) >= 0.3
-            if not readable:
-                item_name = "(OCR 미인식 - 수정 필요)"
-            if len(item_name) >= 1 and not re.match(r"^(No|번호|품목명|합계|소계)$", item_name, re.IGNORECASE):
-                result["items"].append({
-                    "item_name": item_name,
-                    "quantity": int(im.group(3).replace(",", "")),
-                    "unit_price": int(im.group(4).replace(",", "")),
-                    "amount": int(im.group(5).replace(",", ""))
-                })
+            item_name = im.group(1).strip()
+            # 헤더/합계 행 제외
+            if re.match(r"^(No|번호|품목명|품목|합계|소계|계)$", item_name, re.IGNORECASE):
+                pass
+            else:
+                # 유효 문자(한글/영문/숫자) 비율이 30% 미만이면 OCR 쓰레기 문자로 판단
+                valid_chars = len(re.findall(r"[가-힣A-Za-z0-9]", item_name))
+                total_chars = len(item_name.replace(" ", ""))
+                readable = total_chars == 0 or (valid_chars / total_chars) >= 0.3
+                if not readable:
+                    item_name = "(OCR 미인식 - 수정 필요)"
+                if len(item_name) >= 1:
+                    result["items"].append({
+                        "item_name": item_name,
+                        "quantity": int(im.group(2).replace(",", "")),
+                        "unit_price": int(im.group(3).replace(",", "")),
+                        "amount": int(im.group(4).replace(",", ""))
+                    })
+
+    # 테이블에서 품목 파싱 (pdfplumber 구조적 추출 — 텍스트 정규식보다 정확)
+    if tables:
+        table_items = _parse_items_from_tables(tables)
+        if table_items:
+            result["items"] = table_items  # 테이블 결과 우선
+
+    # 스캔 PDF OCR 폴백: 테이블 없고 품목도 못 찾았으면 느슨한 패턴으로 시도
+    if not result["items"] and not tables:
+        result["items"] = _parse_items_ocr_fallback(lines, result.get("total_amount") or 0)
 
     # 금액 미추출 시 보완
     if result["grand_total"] is None and result["total_amount"] is not None:
