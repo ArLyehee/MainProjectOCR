@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import glob
 from datetime import datetime
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from pdf_to_image import pdf_to_images
 from ocr_extractor import extract_text
 from parser import parse_receipt
@@ -28,9 +28,7 @@ def save_to_db(all_parsed_data):
     if not all_parsed_data:
         return
 
-    df = pd.DataFrame(all_parsed_data)
-
-    column_mapping = {
+    header_mapping = {
         '명세서번호': 'statement_no',
         '발행일': 'issue_date',
         '공급받는자': 'customer_name',
@@ -41,31 +39,48 @@ def save_to_db(all_parsed_data):
         '세액': 'tax_amount',
         '합계금액': 'grand_total',
         '담당자': 'manager_name',
-        '공급자': 'supply_name',
-        '품목명': 'product',
+        '공급자': 'supply_name'
     }
 
-    df = df.rename(columns=column_mapping)
+    item_mapping = {
+        'No': 'item_no',
+        '품목명': 'item_name',
+        '수량': 'quantity',
+        '단가': 'unit_price',
+        '금액': 'amount'
+    }
 
-    db_columns = [
-        'statement_no', 'issue_date', 'customer_name', 'customer_addr',
-        'customer_tel', 'customer_biz_no', 'total_amount', 'tax_amount',
-        'grand_total', 'manager_name', 'supply_name', 'product'
-    ]
-    final_df = df[[col for col in db_columns if col in df.columns]].copy()
+    for parsed in all_parsed_data:
+        header_row = {header_mapping[k]: v for k, v in parsed.items() if k in header_mapping}
+        
+        for col in ['total_amount', 'tax_amount', 'grand_total']:
+            if col in header_row and header_row[col] is not None:
+                header_row[col] = float(str(header_row[col]).replace(',', ''))
+            else:
+                header_row[col] = 0
 
-    for col in ['total_amount', 'tax_amount', 'grand_total']:
-        if col in final_df.columns:
-            final_df[col] = pd.to_numeric(
-                final_df[col].astype(str).str.replace(',', ''), errors='coerce'
-            ).fillna(0)
+        try:
+            with engine.begin() as conn:
+                header_df = pd.DataFrame([header_row])
+                header_df.to_sql(name='transaction_statements', con=conn, if_exists='append', index=False)
+                
+                res = conn.execute(text("SELECT LAST_INSERT_ID()"))
+                new_statement_id = res.fetchone()[0]
 
-    try:
-        final_df.to_sql(name='transaction_statements', con=engine,
-                        if_exists='append', index=False)
-        print(f"   [DB 저장 성공] {len(final_df)}건 저장 완료")
-    except Exception as e:
-        print(f"[DB 저장 실패] {e}")
+                if "items" in parsed and parsed["items"]:
+                    items_df = pd.DataFrame(parsed["items"])
+                    items_df = items_df.rename(columns=item_mapping)
+                    items_df['statement_id'] = new_statement_id
+                    
+                    for col in ['quantity', 'unit_price', 'amount']:
+                        if col in items_df.columns:
+                            items_df[col] = pd.to_numeric(items_df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                    
+                    items_df.to_sql(name='transaction_statement_items', con=conn, if_exists='append', index=False)
+                    print(f"[DB 저장 성공] Statement ID: {new_statement_id} (품목 {len(items_df)}건)")
+
+        except Exception as e:
+            print(f"[DB 저장 실패] {e}")
 
 def process_receipt(pdf_path: str):
     file_name   = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -95,11 +110,6 @@ def process_receipt(pdf_path: str):
 
     pd.DataFrame(all_parsed).to_csv(
         os.path.join(exp_dir, "header.csv"), index=False, encoding="utf-8-sig")
-
-    gt_path = os.path.join(ROOT_DIR, "src", "ground_truth.txt")
-    if os.path.exists(gt_path):
-        result = evaluate(ocr_text, gt_path)
-        print(f"accuracy: {result.get('accuracy')}% | AVG CER: {result.get('avg_line_cer')}")
 
     vis_dir = os.path.join(exp_dir, "visualization")
     visualize_pipeline(pdf_path, prep=OCR_CONFIG["prep"], save_dir=vis_dir)
