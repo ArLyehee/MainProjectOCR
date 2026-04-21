@@ -131,36 +131,8 @@ def run_erp_mode(pdf_path: str):
                 debug_tables += f"    row[{ri}]: {row}\n"
         sys.stderr.buffer.write(debug_tables.encode("utf-8", errors="replace"))
 
-        # Groq → Gemini → 정규식 순서로 시도
-        parsed = None
-        if os.environ.get("GROQ_API_KEY"):
-            try:
-                from parser import parse_with_groq
-                parsed = parse_with_groq(raw_text)
-                sys.stderr.buffer.write(b"[PARSER: Groq]\n")
-            except Exception as e:
-                sys.stderr.buffer.write(f"[GROQ FAILED: {e}]\n".encode("utf-8", errors="replace"))
-        if parsed is None and os.environ.get("GEMINI_API_KEY"):
-            try:
-                from parser import parse_with_gemini
-                parsed = parse_with_gemini(raw_text)
-                sys.stderr.buffer.write(b"[PARSER: Gemini]\n")
-            except Exception as e:
-                sys.stderr.buffer.write(f"[GEMINI FAILED: {e}]\n".encode("utf-8", errors="replace"))
-        if parsed is None:
-            parsed = parse_transaction_statement(raw_text, tables)
-            sys.stderr.buffer.write(b"[PARSER: regex fallback]\n")
-
-        # 결과가 부실하고 이미지가 있으면 Vision으로 재시도
-        def _is_poor(p):
-            return p.get("customer_name") is None and p.get("total_amount") is None and not p.get("items")
-        if _is_poor(parsed) and image_paths and os.environ.get("GROQ_API_KEY"):
-            try:
-                from parser import parse_with_groq_vision
-                parsed = parse_with_groq_vision(image_paths)
-                sys.stderr.buffer.write(b"[PARSER: Groq Vision fallback]\n")
-            except Exception as e:
-                sys.stderr.buffer.write(f"[GROQ VISION FAILED: {e}]\n".encode("utf-8", errors="replace"))
+        parsed = parse_transaction_statement(raw_text, tables)
+        sys.stderr.buffer.write(b"[PARSER: regex]\n")
 
         # manager_name은 Java 폼에서 입력받음 — OCR 추출값 사용 안 함
         parsed["manager_name"] = None
