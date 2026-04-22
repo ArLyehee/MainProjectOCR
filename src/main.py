@@ -170,7 +170,7 @@ def erp_mode(pdf_path: str):
         m = re.search(r'상\s*호\s*\(\s*법\s*인\s*명\s*\)\s+(.+?)\s+상\s*호\s*\(\s*법\s*인\s*명\s*\)', all_text)
         supplier = clean_kr(m.group(1)) if m else None
 
-        m = re.search(r'주\s*소\s+(.+?)\s+담\s*당\s*자', all_text)
+        m = re.search(r'주\s*소\s*(.+?)\s*담\s*당\s*자', all_text)
         addr = clean_kr(m.group(1)) if m else None
 
         m = re.search(r'담\s*당\s*자\s+(.+?)(?:\s{2,}|\n|$)', all_text)
