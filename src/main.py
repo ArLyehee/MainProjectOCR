@@ -176,10 +176,16 @@ def erp_mode(pdf_path: str):
         m = re.search(r'담\s*당\s*자\s+(.+?)(?:\s{2,}|\n|$)', all_text)
         manager = clean_kr(m.group(1)) if m else None
 
-        amounts = re.findall(r'([\d,]+)\s*원', all_text)
-        total_amount = to_num(amounts[0]) if len(amounts) > 0 else 0
-        tax_amount   = to_num(amounts[1]) if len(amounts) > 1 else 0
-        grand_total  = to_num(amounts[2]) if len(amounts) > 2 else 0
+        m = re.search(r'공\s*급\s*가\s*액\s+([\d,]+)', all_text)
+        total_amount = to_num(m.group(1)) if m else 0
+
+        m = re.search(r'세\s*액\s+([\d,]+)', all_text)
+        tax_amount = to_num(m.group(1)) if m else 0
+
+        m = re.search(r'합\s*계\s*금\s*액\s+([\d,]+)', all_text)
+        if not m:
+            m = re.search(r'합\s*계\s+([\d,]+)', all_text)
+        grand_total = to_num(m.group(1)) if m else 0
 
         items = []
         for m in re.finditer(r'^(\d+)\s+(.+?)\s+(\d+)\s+([\d,]+)\s+([\d,]+)\s*$', all_text, re.MULTILINE):
