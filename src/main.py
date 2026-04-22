@@ -176,16 +176,24 @@ def erp_mode(pdf_path: str):
         m = re.search(r'담\s*당\s*자\s+(.+?)(?:\s{2,}|\n|$)', all_text)
         manager = clean_kr(m.group(1)) if m else None
 
-        m = re.search(r'공\s*급\s*가\s*액\s+([\d,]+)', all_text)
-        total_amount = to_num(m.group(1)) if m else 0
-
-        m = re.search(r'세\s*액\s+([\d,]+)', all_text)
-        tax_amount = to_num(m.group(1)) if m else 0
-
-        m = re.search(r'합\s*계\s*금\s*액\s+([\d,]+)', all_text)
-        if not m:
-            m = re.search(r'합\s*계\s+([\d,]+)', all_text)
-        grand_total = to_num(m.group(1)) if m else 0
+        total_amount = tax_amount = grand_total = 0
+        lines = all_text.splitlines()
+        for i, line in enumerate(lines):
+            if re.search(r'공\s*급\s*가\s*액', line):
+                nums = re.findall(r'[\d,]{3,}', line)
+                if len(nums) >= 3:
+                    total_amount = to_num(nums[0])
+                    tax_amount   = to_num(nums[1])
+                    grand_total  = to_num(nums[2])
+                else:
+                    for j in range(i + 1, min(i + 4, len(lines))):
+                        nums = re.findall(r'[\d,]{3,}', lines[j])
+                        if len(nums) >= 2:
+                            total_amount = to_num(nums[0])
+                            tax_amount   = to_num(nums[1]) if len(nums) > 1 else 0
+                            grand_total  = to_num(nums[2]) if len(nums) > 2 else 0
+                            break
+                break
 
         items = []
         for m in re.finditer(r'^(\d+)\s+(.+?)\s+(\d+)\s+([\d,]+)\s+([\d,]+)\s*$', all_text, re.MULTILINE):
