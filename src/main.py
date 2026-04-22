@@ -135,7 +135,94 @@ def process_receipt(pdf_path: str):
     print(f"저장 완료: output/{folder_name}/")
 
 
+def erp_mode(pdf_path: str):
+    """ERP 연동 모드: Tesseract OCR → 공백 보정 파서 → JSON 출력"""
+    import json, re
+    try:
+        image_paths = pdf_to_images(pdf_path, dpi=OCR_CONFIG["dpi"])
+        all_text = ""
+        for image_path in image_paths:
+            raw = extract_text(image_path, prep=OCR_CONFIG["prep"],
+                               langs=OCR_CONFIG["langs"], psm=OCR_CONFIG["psm"])
+            all_text += postprocess_text(raw) + "\n"
+
+        def clean_kr(s):
+            if not s: return s
+            prev = ""
+            while prev != s:
+                prev = s
+                s = re.sub(r'([가-힣\?\!]) ([가-힣\?\!])', r'\1\2', s)
+            return s.strip()
+
+        def to_num(s):
+            if not s: return 0
+            return int(re.sub(r'[^\d]', '', str(s)) or '0')
+
+        m = re.search(r'발\s*행\s*일\s+(\d{4}-\d{2}-\d{2})', all_text)
+        issue_date = m.group(1) if m else None
+
+        m = re.search(r'사\s*업\s*자\s*번\s*호\s+([\d]+)', all_text)
+        biz_no = m.group(1) if m else None
+
+        m = re.search(r'연\s*락\s*처\s+([\d\-]+)', all_text)
+        tel = m.group(1) if m else None
+
+        m = re.search(r'상\s*호\s*\(\s*법\s*인\s*명\s*\)\s+(.+?)\s+상\s*호\s*\(\s*법\s*인\s*명\s*\)', all_text)
+        supplier = clean_kr(m.group(1)) if m else None
+
+        m = re.search(r'주\s*소\s+(.+?)\s+담\s*당\s*자', all_text)
+        addr = clean_kr(m.group(1)) if m else None
+
+        m = re.search(r'담\s*당\s*자\s+(.+?)(?:\s{2,}|\n|$)', all_text)
+        manager = clean_kr(m.group(1)) if m else None
+
+        amounts = re.findall(r'([\d,]+)\s*원', all_text)
+        total_amount = to_num(amounts[0]) if len(amounts) > 0 else 0
+        tax_amount   = to_num(amounts[1]) if len(amounts) > 1 else 0
+        grand_total  = to_num(amounts[2]) if len(amounts) > 2 else 0
+
+        items = []
+        for m in re.finditer(r'^(\d+)\s+(.+?)\s+(\d+)\s+([\d,]+)\s+([\d,]+)\s*$', all_text, re.MULTILINE):
+            no, name, qty, price, amt = m.groups()
+            if int(no) >= 1:
+                items.append({"item_name": name.strip(), "quantity": int(qty),
+                              "unit_price": to_num(price), "amount": to_num(amt)})
+
+        data = {
+            "issue_date": issue_date, "customer_name": supplier,
+            "customer_biz_no": biz_no, "customer_tel": tel,
+            "customer_addr": addr, "manager_name": manager,
+            "total_amount": total_amount, "tax_amount": tax_amount,
+            "grand_total": grand_total, "items": items,
+        }
+
+        # 시각화 저장
+        try:
+            pdf_name  = os.path.splitext(os.path.basename(pdf_path))[0]
+            vis_dir   = os.path.join(ROOT_DIR, "output", "erp_results",
+                                     f"{pdf_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            os.makedirs(vis_dir, exist_ok=True)
+            visualize_pipeline(pdf_path, prep=OCR_CONFIG["prep"], save_dir=vis_dir)
+            with open(os.path.join(vis_dir, "ocr_data.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+        sys.stdout.buffer.write(
+            json.dumps({"success": True, "data": data}, ensure_ascii=True).encode("utf-8") + b"\n"
+        )
+    except Exception as e:
+        import json as _json
+        sys.stdout.buffer.write(
+            _json.dumps({"success": False, "error": str(e)}, ensure_ascii=True).encode("utf-8") + b"\n"
+        )
+
+
 if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--erp-mode":
+        erp_mode(sys.argv[2])
+        sys.exit()
+
     input_folder = os.path.join(ROOT_DIR, "input")
     pdf_files = glob.glob(os.path.join(input_folder, "*.pdf"))
 
