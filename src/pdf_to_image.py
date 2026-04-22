@@ -1,27 +1,26 @@
 import os
-from pdf2image import convert_from_path
+import fitz
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
-POPPLER_PATH = os.path.join(ROOT_DIR, "poppler", "bin")
 
 def pdf_to_images(pdf_path: str,
                   output_dir: str = None,
-                  dpi: int = 300) -> list: # DPI가 높으면 정확도 증가
+                  dpi: int = 300) -> list:
     if output_dir is None:
         output_dir = os.path.join(ROOT_DIR, "output", "images")
     os.makedirs(output_dir, exist_ok=True)
 
-    images = convert_from_path(
-        pdf_path,
-        dpi=dpi,
-        poppler_path=POPPLER_PATH
-    )
+    doc = fitz.open(pdf_path)
+    zoom = dpi / 72
+    mat = fitz.Matrix(zoom, zoom)
 
     image_paths = []
-    for i, img in enumerate(images):
+    for i, page in enumerate(doc):
+        pix = page.get_pixmap(matrix=mat)
         path = os.path.join(output_dir, f"page_{i+1}.png")
-        img.save(path, "PNG")
+        pix.save(path)
         image_paths.append(path)
 
+    doc.close()
     return image_paths
